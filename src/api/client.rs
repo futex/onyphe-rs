@@ -48,6 +48,9 @@ impl Client {
         query_params.insert("k", self.api_key.clone());
 
         // Add global config params
+        if let Some(size) = self.config.api_size {
+            query_params.insert("size", size.to_string());
+        }
         if let Some(true) = self.config.api_trackquery {
             query_params.insert("trackquery", "true".to_string());
         }

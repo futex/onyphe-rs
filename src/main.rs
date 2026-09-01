@@ -12,9 +12,69 @@ use config::Config;
 use std::collections::HashMap;
 use ui::printer::print_results;
 
+fn normalize_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut iter = args.into_iter();
+    if let Some(bin) = iter.next() {
+        normalized.push(bin);
+    }
+    let mut in_flags = true;
+    for arg in iter {
+        if !in_flags {
+            normalized.push(arg);
+            continue;
+        }
+
+        if arg == "--" {
+            in_flags = false;
+            normalized.push(arg);
+            continue;
+        }
+
+        if arg.starts_with('-') && !arg.starts_with("--") {
+            let (key, val) = match arg.split_once('=') {
+                Some((k, v)) => (k, Some(v)),
+                None => (arg.as_str(), None),
+            };
+
+            let norm_key = match key {
+                "-size" => "--size",
+                "-key" => "--key",
+                "-maxpage" => "--maxpage",
+                "-config" => "--config",
+                "-aslines" => "--aslines",
+                "-verbose" => "--verbose",
+                "-user" => "user",
+                "-search" => "search",
+                "-summary" => "summary",
+                "-simple" => "simple",
+                "-simple-best" | "-simplebest" => "simple-best",
+                "-export" => "export",
+                "-help" => "--help",
+                "-version" => "--version",
+                _ => key,
+            };
+
+            if let Some(v) = val {
+                if norm_key.starts_with("--") {
+                    normalized.push(format!("{}={}", norm_key, v));
+                } else {
+                    normalized.push(norm_key.to_string());
+                    normalized.push(v.to_string());
+                }
+            } else {
+                normalized.push(norm_key.to_string());
+            }
+        } else {
+            normalized.push(arg);
+        }
+    }
+    normalized
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_args(std::env::args()));
 
     let mut config = Config::load(Some(&cli.config));
 
@@ -147,4 +207,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cli::args::Commands;
+
+    #[test]
+    fn test_size_after_subcommand_double_dash() {
+        let raw = vec!["onyphe", "search", "category:datascan", "--size", "10"];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.size, Some(10));
+        match cli.command {
+            Commands::Search { query } => assert_eq!(query, "category:datascan"),
+            _ => panic!("Expected Search subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_size_after_subcommand_single_dash() {
+        let raw = vec!["onyphe", "search", "category:datascan", "-size", "10"];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.size, Some(10));
+        match cli.command {
+            Commands::Search { query } => assert_eq!(query, "category:datascan"),
+            _ => panic!("Expected Search subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_size_before_subcommand_single_dash() {
+        let raw = vec!["onyphe", "-size", "10", "search", "category:datascan"];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.size, Some(10));
+        match cli.command {
+            Commands::Search { query } => assert_eq!(query, "category:datascan"),
+            _ => panic!("Expected Search subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_size_equals_format() {
+        let raw = vec!["onyphe", "search", "category:datascan", "-size=25"];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.size, Some(25));
+    }
+
+    #[test]
+    fn test_single_dash_subcommand() {
+        let raw = vec!["onyphe", "-search", "category:datascan", "-size", "100", "-aslines"];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.size, Some(100));
+        assert!(cli.aslines);
+        match cli.command {
+            Commands::Search { query } => assert_eq!(query, "category:datascan"),
+            _ => panic!("Expected Search subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_short_size_flag() {
+        let raw = vec!["onyphe", "search", "category:datascan", "-s", "50"];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.size, Some(50));
+    }
+
+    #[test]
+    fn test_all_global_options_single_dash() {
+        let raw = vec![
+            "onyphe",
+            "search",
+            "category:datascan",
+            "-key",
+            "APIKEY123",
+            "-size",
+            "100",
+            "-maxpage",
+            "5",
+            "-config",
+            "/tmp/custom.ini",
+            "-aslines",
+            "-verbose",
+        ];
+        let norm = normalize_args(raw.into_iter().map(String::from));
+        let cli = Cli::parse_from(norm);
+        assert_eq!(cli.key, Some("APIKEY123".to_string()));
+        assert_eq!(cli.size, Some(100));
+        assert_eq!(cli.maxpage, Some(5));
+        assert_eq!(cli.config, "/tmp/custom.ini");
+        assert!(cli.aslines);
+        assert!(cli.verbose);
+    }
 }
