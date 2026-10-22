@@ -42,9 +42,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
-      - run: cargo test --locked
+      - run: cargo test
 
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
 
       - name: Set archive name
         shell: bash
