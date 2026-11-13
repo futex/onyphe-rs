@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 pub mod addcount;
+pub mod fields;
 pub mod uniq;
 
 /// A trait for processing a stream of JSON values.
@@ -40,6 +41,15 @@ impl Pipeline {
                     let fields = args.join("");
                     let keys: Vec<String> = fields.split(',').map(|s| s.to_string()).collect();
                     processors.push(Box::new(uniq::Uniq::new(keys)));
+                }
+                "fields" => {
+                    let spec = args.join("");
+                    let keys: Vec<String> = spec
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    processors.push(Box::new(fields::Fields::new(keys)));
                 }
                 "addcount" => {
                     processors.push(Box::new(addcount::Addcount::new()));
