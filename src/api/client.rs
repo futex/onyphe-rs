@@ -1,4 +1,5 @@
 use reqwest::{Client as ReqwestClient, Url};
+use serde_json::Value;
 use std::collections::HashMap;
 
 use super::models::ApiResponse;
@@ -83,5 +84,70 @@ impl Client {
         params.insert("page", page.to_string());
         let path = format!("/search/{}", urlencoding::encode(query));
         self.get(&path, params).await
+    }
+
+    pub async fn export(&self, query: &str) -> Result<Vec<Value>, String> {
+        let mut url = Url::parse(&format!(
+            "{}/export/{}",
+            self.endpoint,
+            urlencoding::encode(query)
+        ))
+        .map_err(|e| e.to_string())?;
+
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("k", &self.api_key);
+            if let Some(true) = self.config.api_trackquery {
+                pairs.append_pair("trackquery", "true");
+            }
+            if let Some(true) = self.config.api_calculated {
+                pairs.append_pair("calculated", "true");
+            }
+        }
+
+        let mut res = self.http.get(url).send().await.map_err(|e| e.to_string())?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            return match res.json::<ApiResponse>().await {
+                Ok(api_res) => Err(format!("API Error {}: {:?}", status, api_res.text)),
+                Err(_) => Err(format!("HTTP Error {}", status)),
+            };
+        }
+
+        let mut docs = Vec::new();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+            buf.extend_from_slice(&chunk);
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                Self::push_export_line(&line, &mut docs)?;
+            }
+        }
+        Self::push_export_line(&buf, &mut docs)?;
+
+        Ok(docs)
+    }
+
+    fn push_export_line(line: &[u8], docs: &mut Vec<Value>) -> Result<(), String> {
+        let line = String::from_utf8_lossy(line);
+        let line = line.trim();
+        if line.is_empty() {
+            return Ok(());
+        }
+
+        let doc: Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
+        if doc.get("status").and_then(Value::as_str) == Some("nok") {
+            return Err(format!(
+                "API Error: {}",
+                doc.get("text").and_then(Value::as_str).unwrap_or_default()
+            ));
+        }
+        if doc.get("@category").and_then(Value::as_str) == Some("none") {
+            return Ok(());
+        }
+
+        docs.push(doc);
+        Ok(())
     }
 }
