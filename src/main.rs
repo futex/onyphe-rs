@@ -9,8 +9,34 @@ use clap::Parser;
 use cli::args::{Cli, Commands};
 use colored::Colorize;
 use config::Config;
+use serde_json::Value;
 use std::collections::HashMap;
 use ui::printer::print_results;
+
+fn page_number(value: &Value) -> Option<u32> {
+    match value {
+        Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+async fn search_all(client: &Client, query: &str, maxpage: u32) -> Result<Vec<Value>, String> {
+    let mut all = Vec::new();
+    for page in 1..=maxpage {
+        let res = client.search(query, page).await?;
+        let api_max_page = res.max_page.as_ref().and_then(page_number);
+        let results = res.results.unwrap_or_default();
+        if results.is_empty() {
+            break;
+        }
+        all.extend(results);
+        if api_max_page.is_some_and(|max| page >= max) {
+            break;
+        }
+    }
+    Ok(all)
+}
 
 fn normalize_args<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
     let mut normalized = Vec::new();
@@ -89,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.api_maxpage = Some(maxpage);
     }
 
+    let maxpage = config.api_maxpage.unwrap_or(1).max(1);
+
     let client = match Client::new(config) {
         Ok(c) => c,
         Err(e) => {
@@ -144,13 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(res) => Ok(res.results.unwrap_or_default()),
             Err(e) => Err(e),
         },
-        Commands::Search { query } => {
-            let page = 1; // You could add pagination loop here based on maxpage
-            match client.search(&query, page).await {
-                Ok(res) => Ok(res.results.unwrap_or_default()),
-                Err(e) => Err(e),
-            }
-        }
+        Commands::Search { query } => search_all(&client, &query, maxpage).await,
         // We can add other commands later, just stub them out or implement similar to search
         Commands::Summary { kind, query } => {
             let kind_str = match kind {
@@ -186,13 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => Err(e),
             }
         }
-        Commands::Export { query } => {
-            let path = format!("/export/{}", urlencoding::encode(&query));
-            match client.get(&path, HashMap::new()).await {
-                Ok(res) => Ok(res.results.unwrap_or_default()),
-                Err(e) => Err(e),
-            }
-        }
+        Commands::Export { query } => client.export(&query).await,
     };
 
     match result {
